@@ -46,6 +46,6 @@ knitr::opts_knit$set(root.dir = getwd())
 
 # Question B: **Clustering seeds**
 
-```{r load-qB, child="./qB.Rmd", eval=T}
+```{r load-qB, child="./qB.Rmd", eval=F}
 
 ```

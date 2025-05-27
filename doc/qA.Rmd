@@ -381,11 +381,9 @@ comparison %>%
 
 ```
 
-The table above compares the performance of the Random Forest and k-Nearest Neighbors classifiers（kNN）. The Random Forest model achieved the highest AUC (`~0.98`), perfect sensitivity (`1.00`), and higher specificity (`0.39`), suggesting it performs well in both correctly identifying Okataina samples and avoiding false positives.
+The Random Forest model achieved the highest AUC (`~0.98`), perfect sensitivity (`1.00`), and relatively higher specificity (0.39), indicating strong performance in both detecting Okataina samples and avoiding false positives.
 
-In contrast, the kNN model showed slightly lower sensitivity (`0.99`) and lower specificity (`0.23`), meaning it was both slightly less accurate in detecting Okataina and more prone to incorrectly labeling non-Okataina samples as Okataina. Despite the minor drop in recall, the model appears to assign the Okataina label more freely, which increases the risk of false positives.
-
-Given our earlier emphasis on specificity, Random Forest may be preferable.
+In contrast, the kNN model yielded a slightly lower sensitivity (`0.99`) and a significantly reduced specificity (`0.23`). This suggests that kNN is more prone to incorrectly labeling non-Okataina samples as Okataina, increasing the risk of false positives. Therefore, despite similar recall, Random Forest offers more reliable overall performance.
 
 # Discussion
 
@@ -523,6 +521,8 @@ text(
 
 ```
 
+The red point on the ROC curve marks the selected threshold (0.70), which relatively maximizes the Youden index. This threshold balances sensitivity and specificity, improving the model’s ability to confidently classify Okataina samples while reducing false positives.
+
 ```{r, echo=FALSE}
 ggplot(rf_pred_best, aes(x = Yes, fill = obs)) +
   geom_density(alpha = 0.5) +
@@ -539,9 +539,7 @@ ggplot(rf_pred_best, aes(x = Yes, fill = obs)) +
 
 ```
 
-Using a manually selected threshold of `0.70`, we recalculated the classification results for the Random Forest model. This threshold yielded a specificity of `0.79` and a sensitivity of `0.99`—providing a strong balance while prioritizing low false positive rates.
-
-The ROC curve includes a marker at this threshold, showing the trade-off between sensitivity and specificity. A density plot of predicted probabilities by class further visualizes the separation between "Yes" and "No" samples relative to the threshold.
+The density plot of predicted probabilities by class further visualizes the separation between "Yes" and "No" samples relative to the threshold.
 
 # Final Prediction on Unlabeled Data with Random Forest (threshold = 0.70)
 
@@ -570,6 +568,8 @@ rf_pred_result[, c("Predicted_Source", "Probability_Okataina")]
 
 
 ```
+
+With the adjusted threshold set at 0.70, the model classifies a reasonable number of unlabelled samples as “Okataina”, with 21 predictions compared to 27 under the default threshold. This adjustment enhances probabilistic confidence in model's positive classifications.
 
 ## **Predicted Class Distribution (Count of "Okataina")**
 
@@ -641,3 +641,7 @@ While the Random Forest (RF) model achieved high overall classification performa
     The model assumes all features are equally useful unless told otherwise. In geochemical datasets, some elements may be highly collinear or irrelevant. Without embedded feature selection, RF may be vulnerable to redundancy or noise in predictors.
 
 While Random Forest is a powerful and flexible classifier, its performance in this case required manual calibration (e.g., threshold tuning) to meet domain-specific goals such as minimizing false positives. For broader deployment or automated applications, additional safeguards—such as feature selection, uncertainty quantification, and external validation—may be necessary to ensure robust generalization.
+
+## Future Improvements
+
+Future improvements could include cost-sensitive learning, synthetic balancing techniques (e.g., SMOTE), and model interpretation tools such as SHAP or LIME to enhance transparency in geological applications.
