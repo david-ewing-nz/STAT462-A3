@@ -201,13 +201,13 @@ prop.table(table(rocks$okataina))
 Before selecting an alternative modeling approach to Random Forest, we briefly compare several widely used non-tree classifiers. Each has distinct assumptions and strengths that make them suitable for different types of data.
 
 | Method | Assumptions | Strengths | Limitations | Scale Sensitivity |
-|:--:|:---|:---|:---|:--:|
+|:-------------:|:--------------|:--------------|:--------------|:-------------:|
 | **kNN** | No parametric assumption; relies on distance | Simple, non-parametric, interpretable | Sensitive to irrelevant features and scaling | ✅ Yes |
 | QDA/LDA | Gaussian distribution; equal/unequal covariance | Efficient with small data; interpretable decision boundary | Strong assumptions; sensitive to outliers | ✅ Yes |
 | SVM | Maximizes margin between classes | Effective in high-dimensional space; robust to overfitting | Computationally expensive; less interpretable | ✅ Yes |
 | Logistic Regression | Linear decision boundary; independent features | Probabilistic output; interpretable coefficients | Struggles with non-linear boundaries | ✅ Yes |
 
-## Summary Insights 
+## Summary Insights
 
 -   **k-Nearest Neighbors (kNN)** makes no distributional assumptions and is ideal for exploratory use, but it is highly affected by the scale of input features and irrelevant variables.
 
@@ -381,11 +381,11 @@ comparison %>%
 
 ```
 
-The table above compares the performance of the Random Forest and k-Nearest Neighbors classifiers. The Random Forest model achieved the highest AUC (\~`0.98`), perfect sensitivity and relatively higher specificity `0.39`, indicating it was conservative in predicting the positive class ("Okataina").
+The table above compares the performance of the Random Forest and k-Nearest Neighbors classifiers（kNN）. The Random Forest model achieved the highest AUC (`~0.98`), perfect sensitivity (`1.00`), and higher specificity (`0.39`), suggesting it performs well in both correctly identifying Okataina samples and avoiding false positives.
 
-In contrast, the kNN model achieved relative lower sensitivity (`0.99`), but at the cost of reduced specificity to `0.23`. This suggests that the kNN model is more willing to assign the "Okataina" label, increasing recall but potentially risking false positives.
+In contrast, the kNN model showed slightly lower sensitivity (`0.99`) and lower specificity (`0.23`), meaning it was both slightly less accurate in detecting Okataina and more prone to incorrectly labeling non-Okataina samples as Okataina. Despite the minor drop in recall, the model appears to assign the Okataina label more freely, which increases the risk of false positives.
 
-The choice between these models depends on the application's tolerance for false positives versus false negatives. Given our earlier emphasis on specificity, Random Forest may be preferable.
+Given our earlier emphasis on specificity, Random Forest may be preferable.
 
 # Discussion
 
@@ -483,7 +483,7 @@ print(cm_80)
 
 ```
 
-##  ROC Curve with Threshold Marker
+## ROC Curve with Threshold Marker
 
 ```{r , echo=FALSE}
 # Generate ROC object based on cross-validated predictions
