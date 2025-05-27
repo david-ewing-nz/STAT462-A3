@@ -1,0 +1,51 @@
+---
+title: 
+  - "STAT462 Assignment 3 - Classifying volcanic rock and Clustering seeds"
+author: 
+  - Xia Yu (62380486)
+  - David Ewing (82171165)
+date: "`r format(Sys.time(), '%Y-%m-%d %H:%M')`"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r, include = F, echo = F, eval=T}
+# Environment setup: Install and load required packages
+options(repos = c(CRAN = "https://cran.stat.auckland.ac.nz/"))
+required_packages <- c("conflicted", "ggplot2", "dplyr", "plotly", "tidyr", "caret", "knitr", "reshape2","readr","tidyverse","skimr","pROC","MASS")
+for (pkg in required_packages) {
+  if (!requireNamespace(pkg, quietly = TRUE)) install.packages(pkg)
+  library(pkg, character.only = TRUE)
+}
+
+library(conflicted)
+conflicts_prefer(
+  dplyr::filter,
+  dplyr::select,
+  tidyr::expand,
+  plotly::layout,
+  pROC::auc
+)
+
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE, width = 70, cache = FALSE)
+knitr::opts_knit$set(root.dir = getwd())
+```
+
+# Appendix - Common Functions
+
+\newpage
+
+# Question A: **Classifying volcanic rock**
+
+```{r load-qA, child="./qA.Rmd", eval=T}
+
+```
+
+\newpage
+
+# Question B: **Clustering seeds**
+
+```{r load-qB, child="./qB.Rmd", eval=T}
+
+```
