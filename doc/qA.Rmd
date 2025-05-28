@@ -1,0 +1,647 @@
+---
+title: 
+  - "STAT462 Assignment 3 - Classifying volcanic rock and Clustering seeds A"
+author: 
+  - Xia Yu (62380486)
+  - David Ewing (82171165)
+date: "`r format(Sys.time(), '%Y-%m-%d %H:%M')`"
+output:
+  html_document:
+    df_print: paged
+---
+
+*In this question, you are allowed to use any method available to you in R, either programmed yourself, or from packages of your choosing. The important thing here is that you communicate your results very well, in terms of language, illustration, and precision.*
+
+In this question you will analyse a dataset containing volcanic rocks and their chemical composition, collected from various sites in New Zealand. You will predict whether the `Source` of a given rock sample is “Okataina” (a geographical location), or whether the sample comes from somewhere else.
+
+Load the annotated dataset `rocks.csv`. and the unlabelled dataset `rocks_unlabelled.csv`. You will find that rows in the latter set do not contain an entry for `Source`, i.e., they are of unknown origin. Your goal will be to fill these blanks, using the techniques you have learned in this course so far. The following guidelines might be useful to consider:
+
+-   Use a classification-tree-based method (can also be random forests or boosting), and at least one additional different data mining algorithms (two tree variants are not considered “different”). Compare their performance in a suitable way.
+
+-   It will not be enough to just predict some `Source` labels for the missing data, but you will need to quantify and justify the accuracy of your predictions. It is OK if you think that your method is not perfect, but be sure to point out its limitations in this case. You will not be judged on accuracy, but on correctness of procedure, and clarity of communication.
+
+-   How exactly you prepare and work with the dataset is your choice, but follow good practice models as demonstrated in the course (for example, consider “data hygiene”, i.e., don’t test on training data etc.).
+
+-   Be brief, exact, correct, and communicate well.
+
+# Data Loading and Preprocessing
+
+```{r}
+# Load required libraries
+library(tidyverse)    # For data manipulation and visualization
+library(readr)        # For reading CSV files
+library(caret)        # For model training and preprocessing
+library(knitr)        # For neat table rendering
+
+# Load labeled and unlabeled datasets
+rocks <- read_csv("../data/rocks.csv", col_types = cols(...1 = col_skip()))
+rocks_unlabelled <- read_csv("../data/rocks_unlabelled.csv", col_types = cols(...1 = col_skip()))
+
+
+# Inspect the structure of the datasets
+# Check for missing values
+
+skim(rocks)
+skim(rocks_unlabelled)
+
+
+```
+
+We imported two datasets:
+
+`rocks.csv`: labelled training data including the `okataina` variable.
+
+`rocks_unlabelled.csv`: data without labels, to be predicted later.
+
+# 🪾Tree Method: Random Forest
+
+## RF-Tree Training
+
+```{r}
+# Load required packages
+library(randomForest)   # For random forest classifier
+library(caret)          # For cross-validation and evaluation
+library(pROC)           # For AUC calculation
+set.seed(62380486)      # For reproducibility
+
+# Recode the logical target variable into valid factor labels
+rocks$okataina <- factor(rocks$okataina, levels = c(FALSE, TRUE), labels = c("No", "Yes"))
+
+# Define 10-fold cross-validation control
+ctrl <- trainControl(
+  method = "cv",
+  number = 10,
+  classProbs = TRUE,                   # Needed for AUC
+  summaryFunction = twoClassSummary,  # ROC, Sens, Spec
+  savePredictions = TRUE
+)
+
+# Train Random Forest model
+mtry_grid <- expand.grid(mtry = 2:11)  # explicitly specified a tuning grid ranging from mtry = 2 to 11
+tree.rf <- train(
+  okataina ~ ., data = rocks,
+  method = "rf",
+  metric = "ROC",                     # AUC is the performance metric
+  trControl = ctrl,
+  tuneGrid = mtry_grid               # the default mtry serachign range is 3, mannually set to 10.
+)   
+
+# Output model summary
+print(tree.rf)
+plot(tree.rf)
+```
+
+The `mtry` parameter in Random Forest controls the number of predictors randomly selected at each split.
+
+To explore the effect of the number of predictors at each split (`mtry`), we specified a tuning grid from `mtry = 2 to 11`. This allowed the model to evaluate all candidate values through 10-fold cross-validation and select the optimal setting based on the highest AUC. The expanded search space offers more detailed insights into model performance and helps avoid suboptimal defaults.
+
+In this case, the optimal `mtry` is 2, selected from a total of `p = 11` features. By randomly selecting m features from p features, we introduced randomness into the tree-growing process. This approach increased diversity among trees, reduced correlation, and enhanced the ensemble’s ability to reduce variance(Li lecture 2025).
+
+In this model, mtry = 2 resulted in the highest cross-validated ROC of `~0.98`, indicating the best overall discriminative performance. Therefore, it was chosen as the optimal setting.
+
+## Confusion Matrix
+
+```{r}
+# Recompute confusion matrix using best cross-validated predictions
+# Note: Use predictions corresponding to the best mtry model (mtry = 2)
+
+# Filter predictions to match selected tuning parameters
+best_pred <- tree.rf$pred %>%
+  filter(mtry == tree.rf$bestTune$mtry)
+
+# Generate confusion matrix
+conf_matrix <- confusionMatrix(
+  data = best_pred$pred,
+  reference = best_pred$obs,
+  positive = "Yes"  # "Yes" is the target class (Okataina)
+)
+
+# Display confusion matrix
+print(conf_matrix)
+
+```
+
+## ROC Curve and AUC
+
+```{r}
+# Compute ROC curve
+roc_curve <- roc(
+  response = best_pred$obs,
+  predictor = best_pred$Yes,    # predicted probability for class "Yes"
+  levels = c("No", "Yes"),
+  direction = "<"
+)
+
+# Plot ROC curve
+plot(roc_curve,
+     col = "blue",
+     lwd = 2,
+     main = "Random Forest ROC Curve (10-fold CV)")
+abline(a = 0, b = 1, lty = 2, col = "gray")  # diagonal reference line
+
+# Report AUC value
+auc(roc_curve)
+
+```
+
+## Feature Importance Visualisation
+
+```{r}
+# Variable importance from the caret-trained model
+varImpPlot(tree.rf$finalModel, main = "Variable Importance - Random Forest")
+
+# Alternatively, get numeric importance values
+importance_df <- as.data.frame(varImp(tree.rf)$importance)
+importance_df <- importance_df %>%
+  rownames_to_column("Feature") %>%
+  arrange(desc(Overall))
+
+# Pretty barplot using ggplot2
+library(ggplot2)
+ggplot(importance_df, aes(x = reorder(Feature, Overall), y = Overall)) +
+  geom_col(fill = "steelblue") +
+  coord_flip() +
+  labs(title = "Feature Importance in Random Forest Model",
+       x = "Feature", y = "Importance (Gini-based)") +
+  theme_minimal()
+
+```
+
+We visualized feature importance using both `varImpPlot()` from the `randomForest` package and a custom `ggplot2` barplot based on `caret::varImp()`. While both methods rank features similarly, they differ in the scale of the x-axis.
+
+`varImpPlot()` reports raw MeanDecreaseGini scores, reflecting the average reduction in node impurity attributable to each variable across the ensemble. In contrast, `caret::varImp()` returns normalized importance scores on a common scale, which enhances interpretability and aesthetic consistency for visual comparison.
+
+Despite the difference in scale, both plots consistently identify the top predictors, reinforcing their significance in the classification task.
+
+## Feature Importance Summary
+
+Random Forest provides an intrinsic measure of feature importance by evaluating the decrease in node impurity (e.g., Gini index) attributable to each feature across all trees. Features that contribute to more effective splits—especially near the root nodes—are ranked higher.
+
+The importance plot above reveals that `K2O` and `CaO` are the most influential in distinguishing between Okataina and non-Okataina rocks. These variables likely exhibit substantial distributional differences between the classes or interact strongly with other predictors. In contrast, features with low importance may be either weakly informative or redundant in the presence of others.
+
+Such insights can inform geochemical domain knowledge and guide further feature selection or dimensionality reduction.
+
+## Evaluation Metrics **Explanation**
+
+The confusion matrix summarizes the classification performance based on the best cross-validated model. While the model achieves perfect sensitivity, the specificity is considerably low (`~0.38`), indicating that many non-Okataina samples are misclassified as Okataina. This suggests that the rf_tree model is overly eager to assign the positive class.
+
+Additionally, here we care more about the indicator of model performance specificity, which measures the proportion of correctly identified non-Okataina samples. In the context of geological classification, false positives (i.e., misclassifying a non-Okataina rock as Okataina) may lead to incorrect provenance attribution and flawed geological interpretations. Prioritizing high specificity ensures that when the model predicts a rock as coming from Okataina, it does so with high confidence, minimizing spurious identifications.
+
+The low specificity observed in this model may be a result of class imbalance: the okataina variable is skewed, with approximately 88% 'Yes' and only 12% 'No'. This imbalance could bias the model toward predicting the dominant class, reducing its ability to correctly identify the minority class.
+
+```{r}
+table(rocks$okataina)
+prop.table(table(rocks$okataina))
+```
+
+# Non-tree Method Selection
+
+## Comparison of Non-Tree Classification Methods
+
+Before selecting an alternative modeling approach to Random Forest, we briefly compare several widely used non-tree classifiers. Each has distinct assumptions and strengths that make them suitable for different types of data.
+
+| Method | Assumptions | Strengths | Limitations | Scale Sensitivity |
+|:-------------:|:--------------|:--------------|:--------------|:-------------:|
+| **kNN** | No parametric assumption; relies on distance | Simple, non-parametric, interpretable | Sensitive to irrelevant features and scaling | ✅ Yes |
+| QDA/LDA | Gaussian distribution; equal/unequal covariance | Efficient with small data; interpretable decision boundary | Strong assumptions; sensitive to outliers | ✅ Yes |
+| SVM | Maximizes margin between classes | Effective in high-dimensional space; robust to overfitting | Computationally expensive; less interpretable | ✅ Yes |
+| Logistic Regression | Linear decision boundary; independent features | Probabilistic output; interpretable coefficients | Struggles with non-linear boundaries | ✅ Yes |
+
+## Summary Insights
+
+-   **k-Nearest Neighbors (kNN)** makes no distributional assumptions and is ideal for exploratory use, but it is highly affected by the scale of input features and irrelevant variables.
+
+-   **Linear Discriminant Analysis (LDA)** and **Quadratic Discriminant Analysis (QDA)** assume normality and are powerful when those assumptions hold, though they are sensitive to violations such as multicollinearity or class imbalance.
+
+-   **Support Vector Machines (SVM)** are robust and powerful for both linear and non-linear boundaries (via kernels), but their output is less interpretable and requires careful tuning.
+
+-   **Logistic Regression** is a solid baseline method that provides interpretable coefficients and class probabilities, but performs poorly with non-linear class boundaries. All the above models require feature standardization, as they rely on distance or assume standardized inputs.
+
+All the above models require **feature standardization**, as they rely on distance or assume standardized inputs.
+
+## Method Decision
+
+Given the goals of explainability, the weak dependence assumption, and performance evaluation, we suggest applying the k-NN method in this case.
+
+# kNN Method
+
+## Z-score Scaling
+
+```{r}
+# Define the name of the response variable to avoid hardcoding
+label_name <- "okataina"
+
+# Create a preprocessing object that centers and scales all predictor variables.
+# This step computes the mean and standard deviation for each numeric feature.
+# It excludes the response variable ("okataina") from transformation.
+preproc_knn <- preProcess(
+  rocks[, setdiff(names(rocks), label_name)], 
+  method = c("center", "scale")
+)
+
+# Apply the preprocessing model to the predictors to standardize them.
+# Each feature is rescaled to have mean = 0 and standard deviation = 1.
+rocks_knn_scaled <- predict(
+  preproc_knn, 
+  rocks[, setdiff(names(rocks), label_name)]
+)
+
+# Append the original response variable ("okataina") back to the processed data
+# so that the full dataset can be used for classification modeling.
+rocks_knn_scaled[[label_name]] <- rocks[[label_name]]
+
+```
+
+All predictor variables were standardized using Z-score normalization, which ensures that each feature has zero mean and unit variance. This step is essential for k-Nearest Neighbors (kNN), which is sensitive to the scale of input variables. The response variable "okataina" was excluded from this transformation and appended back afterward for modeling.
+
+## kNN Model Training and Cross-validation Evaluation
+
+```{r}
+# Load required libraries
+library(caret)
+library(pROC)
+
+# Set seed for reproducibility
+set.seed(62380486)
+
+# Define 10-fold cross-validation control
+ctrl_knn <- trainControl(
+  method = "cv",              # k-fold cross-validation
+  number = 10,                # 10 folds
+  classProbs = TRUE,          # Needed for ROC and AUC
+  summaryFunction = twoClassSummary,  # Evaluation metric: ROC, Sensitivity, Specificity
+  savePredictions = TRUE      # Store predictions for later analysis
+)
+
+# Train kNN model using caret
+knn_model <- train(
+  okataina ~ ., data = rocks_knn_scaled,
+  method = "knn",
+  metric = "ROC",             # Use AUC as selection metric
+  trControl = ctrl_knn,
+  tuneLength = 10             # Try 10 different k values automatically
+)
+
+# Display model summary
+print(knn_model)
+
+# Plot ROC vs k
+plot(knn_model, main = "kNN Cross-validated AUC vs k")
+
+
+```
+
+From the model summary above, we choose our best `k=11`.
+
+## Model Performance Evaluation
+
+```{r}
+# Extract predictions from best-tuned model
+best_knn_pred <- knn_model$pred %>%
+  filter(k == knn_model$bestTune$k)
+
+# Generate confusion matrix using cross-validated predictions
+conf_matrix_knn <- confusionMatrix(
+  data = best_knn_pred$pred,
+  reference = best_knn_pred$obs,
+  positive = "Yes"
+)
+
+print(conf_matrix_knn)
+
+```
+
+The kNN model was trained using 10-fold cross-validation, with automatic tuning over a range of k values. The optimal number of neighbors was selected at `k=11`, based on the highest ROC=\~`0.90` .
+
+Evaluation using the best model revealed Sensitivity=`0.99`, Specificity = `0.23`, as shown in the confusion matrix.
+
+## ROC Curve and AUC
+
+```{r}
+# Compute ROC curve for best model
+roc_knn <- roc(
+  response = best_knn_pred$obs,
+  predictor = best_knn_pred$Yes,    # Probability of class "Yes"
+  levels = c("No", "Yes")
+)
+
+# Plot ROC curve
+plot(roc_knn,
+     col = "darkgreen",
+     lwd = 2,
+     main = "kNN ROC Curve (10-fold Cross-validation)")
+abline(a = 0, b = 1, lty = 2, col = "gray")
+
+# Output AUC value
+auc(roc_knn)
+
+```
+
+The ROC curve confirms strong discriminative power, with an AUC of `0.8958`.
+
+# Comparison between RF-tree and kNN
+
+Now, we put key performance values of random forest tree and kNN together.
+
+```{r}
+# Extract best predictions from each model
+rf_pred_best <- tree.rf$pred %>%
+  filter(mtry == tree.rf$bestTune$mtry)
+
+knn_pred_best <- knn_model$pred %>%
+  filter(k == knn_model$bestTune$k)
+
+# Compute confusion matrices
+rf_conf <- confusionMatrix(rf_pred_best$pred, rf_pred_best$obs, positive = "Yes")
+knn_conf <- confusionMatrix(knn_pred_best$pred, knn_pred_best$obs, positive = "Yes")
+
+# Build comparison table
+comparison <- tibble::tibble(
+  Model = c("Random Forest", "kNN"),
+  ROC = c(
+    max(tree.rf$results$ROC),
+    max(knn_model$results$ROC)
+  ),
+  Sensitivity = c(
+    rf_conf$byClass["Sensitivity"],
+    knn_conf$byClass["Sensitivity"]
+  ),
+  Specificity = c(
+    rf_conf$byClass["Specificity"],
+    knn_conf$byClass["Specificity"]
+  )
+)
+
+# Round and display
+comparison %>%
+  mutate(across(where(is.numeric), round, 3)) %>%
+  kable(caption = "Cross-validated Performance of Random Forest and kNN (based on actual predictions)")
+
+
+
+```
+
+The Random Forest model achieved the highest AUC (`~0.98`), perfect sensitivity (`1.00`), and relatively higher specificity (0.39), indicating strong performance in both detecting Okataina samples and avoiding false positives.
+
+In contrast, the kNN model yielded a slightly lower sensitivity (`0.99`) and a significantly reduced specificity (`0.23`). This suggests that kNN is more prone to incorrectly labeling non-Okataina samples as Okataina, increasing the risk of false positives. Therefore, despite similar recall, Random Forest offers more reliable overall performance.
+
+# Discussion
+
+## Threshold Chosen by Youden Index(Specificity Concern Improvement)
+
+To solve the rf-tree's low specificity problem, we could manually adjust the classification threshold to increase our confidence in positive predictions.
+
+By default, classification models assign the "Yes" label (i.e., positive class) when the predicted probability exceeds 0.5. However, when specificity is prioritized—such as in this geological classification task, where false positives may lead to misinterpretation of provenance—it is advisable to raise this threshold. Doing so makes the model more conservative in assigning the "Yes" class, thereby reducing the false positive rate and improving specificity.
+
+This approach represents a post-hoc calibration technique where we trade off sensitivity for higher specificity. We can identify an optimal threshold by evaluating metrics such as the ROC curve, precision-recall tradeoff, or maximizing the Youden index (sensitivity + specificity - 1).
+
+```{r}
+# Define threshold values to evaluate
+thresholds <- seq(0.1, 0.9, by = 0.05)
+
+# Initialize empty results frame
+youden_df <- data.frame()
+
+# Loop over thresholds to compute sensitivity, specificity, and Youden index
+for (t in thresholds) {
+  pred_label <- ifelse(rf_pred_best$Yes > t, "Yes", "No") %>%
+    factor(levels = c("No", "Yes"))
+  
+  cm <- confusionMatrix(pred_label, rf_pred_best$obs, positive = "Yes")
+  
+  sens <- cm$byClass["Sensitivity"]
+  spec <- cm$byClass["Specificity"]
+  youden <- sens + spec - 1
+  
+  youden_df <- rbind(youden_df, data.frame(
+    Threshold = t,
+    Sensitivity = round(sens, 3),
+    Specificity = round(spec, 3),
+    YoudenIndex = round(youden, 3)
+  ))
+}
+
+# Show table
+youden_df
+
+# Get the top 5 thresholds with the highest Youden Index
+top5_youden <- youden_df %>%
+  arrange(desc(YoudenIndex)) %>%
+  head(5)
+
+# Show the top 5 thresholds
+top5_youden
+
+```
+
+```{r,echo=FALSE}
+# Convert wide data (youden_df) to long format for ggplot
+youden_long <- youden_df %>%
+  pivot_longer(cols = c(Sensitivity, Specificity, YoudenIndex),
+               names_to = "Metric", values_to = "Value")
+
+# Add highlight of best threshold
+ggplot(youden_long, aes(x = Threshold, y = Value, color = Metric)) +
+  geom_line(linewidth = 1.2) +
+  geom_point(size = 2) +
+  geom_vline(xintercept = 0.70, linetype = "dashed", color = "black") +
+  annotate("text", x = 0.6, y = 0.1,
+           label = paste("Chosen Threshold = ",0.70),
+           hjust = 0, size = 4, color = "black",
+           cex = 0.6
+           ) +
+  labs(
+    title = "Threshold Optimization via Youden Index",
+    x = "Threshold",
+    y = "Metric Value"
+  ) +
+  theme_minimal()
+
+```
+
+To identify the optimal decision threshold, we plotted sensitivity, specificity, and the Youden Index across a range of thresholds from 0.1 to 0.9. The curve shows how increasing the threshold improves specificity while reducing sensitivity.
+
+The Youden Index peaks at a threshold of 0.75 and 0.80, suggesting these provide the best trade-off between true positive and true negative rates. This visualization supports threshold tuning as a post-hoc calibration method when the default cutoff (0.5) does not align with domain-specific priorities.
+
+However, it is not always realistic to choose the threshold value at the peak of the Youden Index, considering that real-world data distributions vary. By experiment couple times, we set our threshold at 0.70.
+
+## Confusion Matrix \@ Threshold = 0.70
+
+```{r}
+# Manually set threshold = 0.70
+threshold <- 0.70
+
+# Classify predictions based on threshold
+rf_pred_best$custom_pred <- ifelse(rf_pred_best$Yes > threshold, "Yes", "No") %>%
+  factor(levels = c("No", "Yes"))
+
+# Compute confusion matrix
+cm_80 <- confusionMatrix(rf_pred_best$custom_pred, rf_pred_best$obs, positive = "Yes")
+print(cm_80)
+
+```
+
+## ROC Curve with Threshold Marker
+
+```{r , echo=FALSE}
+# Generate ROC object based on cross-validated predictions
+roc_rf <- roc(rf_pred_best$obs, rf_pred_best$Yes, levels = c("No", "Yes"))
+
+# Create predictions using threshold = 0.70
+pred_70 <- ifelse(rf_pred_best$Yes > 0.70, "Yes", "No") %>%
+  factor(levels = c("No", "Yes"))
+
+# Calculate confusion matrix at threshold = 0.70
+cm_70 <- confusionMatrix(pred_70, rf_pred_best$obs, positive = "Yes")
+
+# Extract Sensitivity and Specificity
+sens_70 <- cm_70$byClass["Sensitivity"]
+spec_70 <- cm_70$byClass["Specificity"]
+
+# Plot ROC curve and mark threshold point
+plot(roc_rf,
+     col = "darkgreen", lwd = 2,
+     main = "ROC Curve with Threshold = 0.70 Marked")
+abline(a = 0, b = 1, lty = 2, col = "gray")
+
+points(
+  x = 1 - spec_70,
+  y = sens_70,
+  col = "red", pch = 19, cex = 1.5
+)
+
+text(
+  x = 1 - spec_70 + 0.02, y = sens_70,
+  labels = paste0("Thresh = 0.70\n(Sens = ", round(sens_70, 2), 
+                  ", Spec = ", round(spec_70, 2), ")"),
+  col = "red", pos = 4,
+  cex = 0.7
+)
+
+
+```
+
+The red point on the ROC curve marks the selected threshold (0.70), which relatively maximizes the Youden index. This threshold balances sensitivity and specificity, improving the model’s ability to confidently classify Okataina samples while reducing false positives.
+
+```{r, echo=FALSE}
+ggplot(rf_pred_best, aes(x = Yes, fill = obs)) +
+  geom_density(alpha = 0.5) +
+  geom_vline(xintercept = 0.70, color = "red", linetype = "dashed", linewidth = 1) +
+  scale_fill_manual(values = c("No" = "steelblue", "Yes" = "darkorange")) +
+  labs(
+    title = "Predicted Probability Density by Class (Threshold = 0.70)",
+    x = "Predicted Probability of 'Yes'",
+    fill = "True Class"
+  ) +
+  theme_minimal()
+
+
+
+```
+
+The density plot of predicted probabilities by class further visualizes the separation between "Yes" and "No" samples relative to the threshold.
+
+# Final Prediction on Unlabeled Data with Random Forest (threshold = 0.70)
+
+```{r}
+# Step 1: Remove rows with missing values from the unlabeled dataset
+rocks_unlabelled_clean <- na.omit(rocks_unlabelled)
+
+# Step 2: Standardize the predictors using the same model from training
+rocks_unlabelled_scaled <- predict(preproc_knn, rocks_unlabelled_clean)
+
+# Step 3: Predict class probabilities using the trained Random Forest model
+rf_probs <- predict(tree.rf, newdata = rocks_unlabelled_scaled, type = "prob")
+
+# Step 4: Apply threshold = 0.70 to assign class labels
+rf_pred_class <- ifelse(rf_probs$Yes > 0.70, "Okataina", "Not Okataina")
+
+# Step 5: Combine results with predicted class and probability
+rf_pred_result <- rocks_unlabelled_clean %>%
+  mutate(
+    Predicted_Source = rf_pred_class,
+    Probability_Okataina = round(rf_probs$Yes, 3)
+  )
+
+# Step 6: View first few predictions
+rf_pred_result[, c("Predicted_Source", "Probability_Okataina")]
+
+
+```
+
+With the adjusted threshold set at 0.70, the model classifies a reasonable number of unlabelled samples as “Okataina”, with 21 predictions compared to 27 under the default threshold. This adjustment enhances probabilistic confidence in model's positive classifications.
+
+## **Predicted Class Distribution (Count of "Okataina")**
+
+```{r}
+# Count predicted categories
+table(rf_pred_result$Predicted_Source)
+
+# Show proportion
+prop.table(table(rf_pred_result$Predicted_Source))
+
+```
+
+```{r, echo=FALSE}
+ggplot(rf_pred_result, aes(x = Probability_Okataina)) +
+  geom_histogram(bins = 15, fill = "darkgreen", alpha = 0.7, color = "white") +
+  geom_vline(xintercept = 0.70, color = "red", linetype = "dashed") +
+  labs(
+    title = "Histogram of Predicted Probabilities for 'Okataina'",
+    x = "Predicted Probability",
+    y = "Count"
+  ) +
+  theme_minimal()
+
+```
+
+The histogram of predicted probabilities indicates the confidence spread, while the sorted bar chart clearly identifies which samples have the strongest predicted likelihood of being from Okataina. These visualizations support interpretation and downstream selection of high-confidence samples.
+
+```{r , echo=FALSE}
+# Sort by probability descending
+rf_pred_sorted <- rf_pred_result %>%
+  arrange(desc(Probability_Okataina)) %>%
+  mutate(Sample_ID = row_number())  # index for plotting
+
+ggplot(rf_pred_sorted, aes(x = reorder(as.factor(Sample_ID), -Probability_Okataina),
+                           y = Probability_Okataina,
+                           fill = Predicted_Source)) +
+  geom_col() +
+  geom_hline(yintercept = 0.70, linetype = "dashed", color = "red") +
+  labs(
+    title = "Predicted Probabilities Sorted by Confidence",
+    x = "Sample Index (Sorted)",
+    y = "Predicted Probability of 'Okataina'"
+  ) +
+  scale_fill_manual(values = c("Okataina" = "darkorange", "Not Okataina" = "steelblue")) +
+  theme_minimal() +
+  theme(axis.text.x = element_blank())
+
+```
+
+The distribution of predicted classes for the unlabelled samples shows that X out of Y were classified as "okataina" under the 0.70 threshold.
+
+## Limitations of the Random Forest Tree
+
+While the Random Forest (RF) model achieved high overall classification performance (AUC \~`0.90`), several limitations suggest potential concerns regarding its generalizability to new or unseen data:
+
+1.  Overfitting Risk on Imbalanced Data\
+    The dataset exhibits strong class imbalance, with over 88% of samples labelled as "Okataina". Although RF can handle imbalance better than single trees, the model may still overfit to the majority class, leading to inflated accuracy and potentially low recall on minority classes.
+
+2.  Low Specificity in Default Settings\
+    Without manual threshold tuning, the RF model showed near-perfect sensitivity but very low specificity (≈ 0.38). This behavior indicates that the model tends to over-predict the positive class, which could reduce reliability in negative class detection (i.e., identifying non-Okataina rocks).
+
+3.  Interpretability and Decision Transparency\
+    Despite being more interpretable than neural networks, RF is still an ensemble of many deep trees. Understanding individual decision paths or explaining why a specific rock was classified as "Okataina" remains difficult without post-hoc analysis (e.g., SHAP values).
+
+4.  Sensitivity to Input Noise and Missing Data\
+    During prediction on the unlabeled dataset, several samples had to be removed due to missing values. RF does not natively handle missing values unless specifically engineered. This can limit robustness in real-world scenarios where geochemical data is often incomplete.
+
+5.  Fixed Feature Importance\
+    The model assumes all features are equally useful unless told otherwise. In geochemical datasets, some elements may be highly collinear or irrelevant. Without embedded feature selection, RF may be vulnerable to redundancy or noise in predictors.
+
+While Random Forest is a powerful and flexible classifier, its performance in this case required manual calibration (e.g., threshold tuning) to meet domain-specific goals such as minimizing false positives. For broader deployment or automated applications, additional safeguards—such as feature selection, uncertainty quantification, and external validation—may be necessary to ensure robust generalization.
+
+## Future Improvements
+
+Future improvements could include cost-sensitive learning, synthetic balancing techniques (e.g., SMOTE), and model interpretation tools such as SHAP or LIME to enhance transparency in geological applications.
