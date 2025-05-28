@@ -1,0 +1,363 @@
+---
+title: "STAT462 Assignment 3 – Question 2"
+author: "Xia Yu (62380486) & David Ewing (82171165)"
+date: "`r format(Sys.time(), '%Y-%m-%d %H:%M')`"
+output:
+  html_document 
+---
+
+```{r libraries}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+options(repos = c(CRAN = "https://cran.stat.auckland.ac.nz/"))
+required_pkgs <- c(
+  "dplyr", "tidyr", "readr", "tibble", "janitor", "skimr",
+  "recipes", "rsample", "tidymodels", "rpart", "kernlab",
+  "FactoMineR", "factoextra", "caret" , "purrr", "plotly",
+  "RColorBrewer"
+)
+to_install <- setdiff(required_pkgs, rownames(installed.packages()))
+if (length(to_install)) install.packages(to_install, dependencies = TRUE)
+invisible(lapply(required_pkgs, library, character.only = TRUE))
+```
+
+## Data Load and Inspection
+
+```{r data-load}
+candidate <- c("../data/unzipped", "./data/unzipped", "data/unzipped")
+data_dir  <- candidate[file.exists(candidate)][1]
+if (is.na(data_dir)) stop("Cannot find data folder.")
+path_annotated <- file.path(data_dir,"seeds_annotated.csv")
+path_unlabeled <- file.path(data_dir,"seeds.csv")
+annotated <- read_csv(path_annotated, locale=locale(decimal_mark=","), show_col_types=FALSE)
+unlabeled <- read_csv(path_unlabeled, locale=locale(decimal_mark=","), show_col_types=FALSE)
+has_annotated_index <- "...1" %in% names(annotated)  
+has_unlabeled_index <- "...1" %in% names(unlabeled) 
+if (has_annotated_index) annotated <- select(annotated,-...1)
+if (has_unlabeled_index) unlabeled <- select(unlabeled,-...1)
+
+glimpse(unlabeled)
+glimpse(annotated)
+
+```
+
+```{r glimpses}
+names(annotated) <- trimws(names(annotated))
+annotated <- mutate(annotated, Class=as.factor(Class))
+annotated |> glimpse()
+head(annotated)
+cat("NAs in annotated:", sum(is.na(annotated)), "\n")
+names(unlabeled) <- trimws(names(unlabeled))
+unlabeled |> glimpse()
+head(unlabeled)
+cat("NAs in unlabeled:", sum(is.na(unlabeled)), "\n")
+```
+
+## 3. Z-score Normalisation
+
+```{r scale-unlabeled}
+unlabeled_scaled <- select(unlabeled, where(is.numeric)) |>
+  scale() |> as_tibble()
+```
+
+## 4. K‑means from Scratch
+
+```{r kmeans-from-scratch}
+
+delta_to_centroid <- function(X, centroid) {
+  n <- nrow(X)
+  p <- ncol(X)
+  rowSums((X - matrix(centroid, n, p, byrow = TRUE))^2)
+  }
+
+delta_matrix <- function(X, centroids) {
+  k <- nrow(centroids)
+  sapply(seq_len(k),function(i) delta_to_centroid(X, centroids[i, ]))
+  }
+
+f_kmeans <- function(data, k, max_iter = 100, start = 10) {
+  set.seed(82171165)
+  X <- as.matrix(data)
+  n <- nrow(X)
+  p <- ncol(X)
+
+  centroids    <- X[sample(n), , drop = FALSE][1:k, ] #  k random centroids
+  clusters     <- integer(n)
+  iter_reached <- NA
+
+  for (iter in seq_len(max_iter)) {
+    distances     <- delta_matrix(X, centroids)
+    clusters_new  <- max.col(-distances) #idx of first largest
+    has_converged <- !anyNA(clusters_new) && all(clusters_new == clusters)
+    cat(iter, "of", max_iter, "\n"); flush.console()
+
+    if (has_converged) {
+      iter_reached <- iter
+      cat("converge @ iter_reached:", iter_reached, "\n")
+      break
+    }
+
+    clusters <- clusters_new
+
+    # recompute centroids
+    for (j in seq_len(k)) {
+      idx <- which(clusters == j)
+      if (length(idx) > 0) {centroids[j, ] <- colMeans(X[idx, , drop = FALSE])
+        }
+      }
+    }
+
+  list(clusters  = clusters,      # return values
+       centroids = centroids,
+       iter      = iter_reached
+      )
+   }
+
+compute_wss <- function(k, X, max_iter, start) {
+  res <- tryCatch(
+    f_kmeans(X, k, max_iter, start),
+    error = function(e) NULL
+  )
+  if (is.null(res) || is.null(res$tot.withinss)) {
+    return(NA_real_)  # must return a length-1 numeric
+  }
+  return(as.numeric(res$tot.withinss))  # force numeric(1)
+}
+
+
+k_vals <- 2:10
+unlabeled_use <- unlabeled_scaled
+if (!exists("max_iter")) max_iter <- 100
+if (!exists("start")) start <- 10
+wss_values <- sapply( k_vals, function(k) compute_wss(k, unlabeled_use, max_iter, start))
+
+
+
+
+
+
+```
+
+```{r test-toggle}
+testing <- FALSE
+if (testing) {
+  message("🟡 Quick test: 500 rows, k=2:4, iter.max=5")
+  unlabeled_use <- unlabeled_scaled[1:500,]; k_vals <- 2:4; max_iter <- 5
+} else {
+  message("🟢 Full run: all rows, k=2:10, iter.max=100")
+  unlabeled_use <- unlabeled_scaled; k_vals <- 2:10; max_iter <- 100
+}
+k_vals <- 2:10
+unlabeled_use <- unlabeled_scaled
+wss_values <- vapply(k_vals, function(k) compute_wss(k, unlabeled_use, max_iter, start), numeric(1))
+
+unlabeled_use <- unlabeled_scaled
+if (exists("wss_values") && any(is.finite(wss_values))) {
+plot(k_vals, wss_values, type="b", pch=19,
+     xlab = "k",
+     ylab = expression(paste("Within-cluster ", sum((x[i] - c[k])^2))),
+     main = if (testing) "Elbow (testing)" else "Elbow (full)",
+     xaxt = "n")
+##     xlab="Number of clusters (k)", 
+#     ylab=expression("Within-cluster " * sum((x[i]-c[k])^2)),
+#     main=if(testing) "Elbow (testing)" else "Elbow (full)", xaxt="n")
+axis(1, at = k_vals)
+#                       side=1,line=3,cex=0.8)
+
+
+}
+```
+
+```{r diagnostics}
+debug_tbl <- purrr::map_dfr(k_vals, function(k) {
+  res <- f_kmeans(unlabeled_scaled,k,max_iter)
+  tot_within <- compute_wss(k,unlabeled_use,max_iter)
+  grand_mean <- colMeans(unlabeled_use)
+  totss <- sum(rowSums((as.matrix(unlabeled_use) -
+           matrix(grand_mean,nrow(unlabeled_use),ncol(unlabeled_use),byrow=TRUE))^2))
+  betweenss <- totss - tot_within
+  tibble(k, tot_within, totss, betweenss,
+         identity_ok=abs(totss-(betweenss+tot_within))<1e-8)
+})
+print(debug_tbl)
+```
+
+
+```{r elbow-plot}
+unlabeled_use <- unlabeled_scaled
+k_vals <- 2:10
+max_iter <- 100
+start <- 10
+wss_values <- vapply(
+  k_vals,
+  function(k) compute_wss(k, unlabeled_use, max_iter, start),
+  numeric(1)
+)
+
+if (all(is.na(wss_values)) || all(!is.finite(wss_values))) {
+  warning("All clustering attempts failed. No elbow plot can be drawn.")
+} else {
+if (all(is.na(wss_values)) || all(!is.finite(wss_values))) {
+  warning("All clustering attempts failed. No elbow plot can be drawn.")
+} else {
+if (exists("wss_values") && any(is.finite(wss_values))) {
+plot(
+  k_vals, wss_values, type="b", pch=19,
+  xlab = "k",
+  ylab = expression(paste("Within-cluster ", sum((x[i] - c[k])^2))),
+  main = if (testing) "Elbow (testing)" else "Elbow (full)",
+  xaxt = "n"
+)
+axis(1, at = k_vals)
+}
+}
+}
+```
+
+## 5. Final Clustering
+
+```{r cluster-final}
+```{r final-clustering}
+k_best <- 7
+res_final <- f_kmeans(
+  unlabeled_scaled,
+  k_best,
+  max_iter,
+  start
+)
+
+unlabeled_use$cluster <- res_final$clusters
+
+# Align clusters with annotated classes using majority vote
+library(dplyr)
+if (exists("annotated")) {
+  # Merge annotated labels into clustering output
+label_col <- "Class"
+  annotated_subset <- annotated %>% filter(!is.na(Class))
+  annotated_subset$cluster <- res_final$clusters[as.integer(rownames(annotated_subset))]
+  mapping <- annotated_subset %>%
+    count(Class, cluster) %>%
+    group_by(cluster) %>%
+    slice_max(n, n = 1, with_ties = FALSE) %>%
+    ungroup()
+  cluster_map <- setNames(as.character(mapping$Class), mapping$cluster)
+  # Apply mapping to unlabeled_use
+  unlabeled_use$label <- cluster_map[as.character(res_final$clusters)]
+}
+
+res_final$iter
+table(unlabeled_use$cluster)
+```
+
+```{r res-summary, echo=TRUE}
+cat("Converged in", res_final$iter, "iterations\n")
+cat("Cluster sizes:\n")
+print(table(res_final$clusters))
+```
+
+```{r final-clustering-7}
+k_best <- 7
+res_final <- f_kmeans(
+  unlabeled_scaled,
+  k_best,
+  max_iter,
+  start
+)
+
+unlabeled_use$cluster <- res_final$clusters
+res_final$iter
+table(unlabeled_use$cluster)
+```
+
+
+## 6. Classification on Annotated Data
+
+```{r classifier-on-annotated}
+annotated$Class <- as.factor(annotated$Class)
+ann <- select(annotated, -Class) |> scale() |> as_tibble()
+ann$Class <- annotated$Class
+annotated$Class <- as.factor(annotated$Class)
+ann <- select(annotated,-Class)|>scale()|>as_tibble(); ann$Class<-annotated$Class
+set.seed(82171165)
+idx <- createDataPartition(ann$Class,p=0.7,list=FALSE)
+train<-ann[idx,]; test<-ann[-idx,]
+model<-train(Class~.,data=train,method="svmRadial")
+pred<-predict(model,test); confusionMatrix(pred,test$Class)
+```
+
+## 7. HCPC 3D Factor Map
+
+```{r hcpc-3d, message=FALSE, warning=FALSE}
+if (!exists("res.pca")||!exists("res.hcpc")) {
+  hcpc_data<-scale(unlabeled)
+  res.pca<-PCA(hcpc_data,graph=FALSE)
+  res.hcpc<-HCPC(res.pca,graph=FALSE)
+}
+pca_coords<-as.data.frame(res.pca$ind$coord[,1:3]);
+colnames(pca_coords)<-c("PC1","PC2","PC3");
+pca_coords$cluster<-factor(res.hcpc$data.clust$clust)
+pal<-brewer.pal(max(3,length(levels(pca_coords$cluster))),"Set2")
+if (knitr::is_html_output()) {
+  plot_ly(data=pca_coords,x=~PC1,y=~PC2,z=~PC3,type="scatter3d",mode="markers",
+          color=~cluster,colors=pal,marker=list(size=4))|>
+    layout(scene=list(xaxis=list(title="PC1"),yaxis=list(title="PC2"),zaxis=list(title="PC3")),
+           legend=list(title=list(text="Cluster")))
+} else {
+  fviz_cluster(res.hcpc,geom="point",repel=TRUE,show.clust.cent=TRUE,axes=c(1,2),palette=pal)
+}
+```
+
+```{r}
+
+library(ggplot2)
+library(dplyr)
+library(glue)
+
+# Combine cluster info with PCA coordinates
+pca_clustered <- pca_coords %>%
+  mutate(cluster = unlabeled_use$cluster)
+
+# Select one cluster to highlight
+target_cluster <- 3
+highlight <- filter(pca_clustered, cluster == target_cluster)
+
+# Plot just the selected cluster in 2D
+ggplot(highlight, aes(x = PC1, y = PC2)) +
+  geom_point(color = "steelblue", alpha = 0.7) +
+  labs(
+    title = glue("Cluster {target_cluster}: PCA Projection"),
+    x = "PC1", y = "PC2"
+  ) +
+  theme_minimal()
+
+
+
+```
+
+
+```{r plot-single-cluster}
+# Set which cluster to highlight
+target_cluster <- 3
+
+# Compute PCA coordinates if not already done
+if (!exists("pca_coords")) {
+  pca_coords <- as.data.frame(res.pca$ind$coord[, 1:2])
+  colnames(pca_coords) <- c("PC1", "PC2")
+}
+
+# Add cluster assignment
+pca_coords$cluster <- factor(res_final$clusters)
+
+# Filter only points from the target cluster
+highlight <- pca_coords %>% filter(cluster == target_cluster)
+
+# Plot only this cluster
+ggplot(highlight, aes(x = PC1, y = PC2)) +
+  geom_point(color = "steelblue", size = 3, alpha = 0.6) +
+  labs(
+    title = glue("Points from Cluster {target_cluster}"),
+    x = "PC1", y = "PC2"
+  ) +
+  theme_minimal()
+
+
+
