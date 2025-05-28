@@ -15,11 +15,19 @@ output:
 options(repos = c(CRAN = "https://cran.stat.auckland.ac.nz/"))
 required_packages <- c("conflicted", "ggplot2", "dplyr", "plotly", "tidyr",
                        "caret", "knitr", "reshape2", "readr", "tidyverse",
-                       "skimr", "pROC", "MASS")
-for (pkg in required_packages) {
+                       "skimr", "pROC", "MASS", "gvlma")
+                       for (pkg in required_packages) {
   if (!requireNamespace(pkg, quietly = TRUE)) install.packages(pkg)
   library(pkg, character.only = TRUE)
 }
+
+
+to_install <- setdiff(required_pkgs, rownames(installed.packages()))
+if (length(to_install)) install.packages(to_install, dependencies = TRUE)
+invisible(lapply(required_pkgs, library, character.only = TRUE))
+
+
+
 
 library(conflicted)
 conflicts_prefer(
@@ -29,7 +37,7 @@ conflicts_prefer(
   plotly::layout,
   pROC::auc
 )
-
+options(repos = c(CRAN = "https://cran.stat.auckland.ac.nz/"))
 knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE, width = 70)
 knitr::opts_knit$set(root.dir = getwd())
 ```
@@ -37,7 +45,7 @@ knitr::opts_knit$set(root.dir = getwd())
 ## Data extraction
 
 ```{r data-extraction, include=FALSE}
-# ---- helper: unzip only if needed, with messages --------------------------
+# ---- helper: unzip only if needed -----------------------------------------
 # ---- set message=T to see the messages for debugging ----------------------
 
 ensure_unzipped <- function(zip_path,
@@ -65,7 +73,7 @@ ensure_unzipped <- function(zip_path,
   invisible(TRUE)
 }
 
-# ---- run it ---------------------------------------------------------------
+# ---- execute --------------------------------------------------------------
 ensure_unzipped(
   zip_path        = "../data/data_assignment_3.zip",
   files_to_extract = c("rocks.csv",
