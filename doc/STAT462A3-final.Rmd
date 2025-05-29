@@ -1,0 +1,71 @@
+---
+title: 
+  - "STAT462 Assignment 3 - Classifying volcanic rock and Clustering seeds"
+author: 
+  - Xia Yu (62380486)
+  - David Ewing (82171165)
+date: "`r format(Sys.time(), '%Y-%m-%d %H:%M')`"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r, include = F, echo = F, eval=T}
+# Environment setup: Install and load required packages
+options(repos = c(CRAN = "https://cran.stat.auckland.ac.nz/"))
+required_packages <- c("conflicted", "ggplot2", "dplyr", "plotly", "tidyr", "caret", "knitr", "reshape2","readr","tidyverse","skimr","pROC","MASS")
+for (pkg in required_packages) {
+  if (!requireNamespace(pkg, quietly = TRUE)) install.packages(pkg)
+  library(pkg, character.only = TRUE)
+}
+
+library(conflicted)
+conflicts_prefer(
+  dplyr::filter,
+  dplyr::select,
+  tidyr::expand,
+  plotly::layout,
+  pROC::auc
+)
+
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE, width = 70, cache = FALSE)
+knitr::opts_knit$set(root.dir = getwd())
+```
+
+# Question A: **Classifying volcanic rock**
+
+*In this question, you are allowed to use any method available to you in R, either programmed yourself, or from packages of your choosing. The important thing here is that you communicate your results very well, in terms of language, illustration, and precision.*
+
+In this question you will analyse a dataset containing volcanic rocks and their chemical composition, collected from various sites in New Zealand. You will predict whether the `Source` of a given rock sample is “Okataina” (a geographical location), or whether the sample comes from somewhere else.
+
+Load the annotated dataset `rocks.csv`. and the unlabelled dataset `rocks_unlabelled.csv`. You will find that rows in the latter set do not contain an entry for `Source`, i.e., they are of unknown origin. Your goal will be to fill these blanks, using the techniques you have learned in this course so far. The following guidelines might be useful to consider:
+
+-   Use a classification-tree-based method (can also be random forests or boosting), and at least one additional different data mining algorithms (two tree variants are not considered “different”). Compare their performance in a suitable way.
+
+-   It will not be enough to just predict some `Source` labels for the missing data, but you will need to quantify and justify the accuracy of your predictions. It is OK if you think that your method is not perfect, but be sure to point out its limitations in this case. You will not be judged on accuracy, but on correctness of procedure, and clarity of communication.
+
+-   How exactly you prepare and work with the dataset is your choice, but follow good practice models as demonstrated in the course (for example, consider “data hygiene”, i.e., don’t test on training data etc.).
+
+-   Be brief, exact, correct, and communicate well.
+
+```{r load-qA, child="./qA.Rmd", eval=T}
+
+```
+
+\newpage
+
+# Question B: **Clustering seeds**
+
+*In this question, you are not allowed to use* *any pre-implemented modules for performing k-means, expectation maximisation, or other clustering algorithms. You will need to provide your own implementation.*
+
+We will work with a dataset `seeds.csv` containing measurements of a large number of seeds. Each seed is measured in terms of “Area”, “Perimeter”, “MajorAxisLength”, “ConvexArea”, and other optical characteristics of this seed. Your goal in this question will be to find clusters in this dataset, i.e. try and find groups of “different types of seed” (the seeds come from different plants, but this information has been lost, so all we can do is try and estimate how many different types of seeds we have).
+
+1.  Perform data preprocessing, if appropriate.
+
+2.  Investigate the question “how many types of seeds are there”, and present your results briefly, but coherently.
+
+3.  *Opportunities for showing extra effort:* The additional dataset `seeds_annotated.csv` contains (few) datapoints which have class labels (A,B,…,G), annotated by an expert of seeds. Use this, in combination with your results from your clustering analysis, to train a seed type prediction algorithm that takes the measurements of a seed and predicts its type. Test your algorithm in a suitable way and communicate your findings (you need to be careful not to check performance purely on the annotated training set). [You do not need to implement your algorithms yourself in this part of the question, feel free to use whatever code works best for you]
+
+```{r load-qB, child="./qB.Rmd", eval=T}
+
+```

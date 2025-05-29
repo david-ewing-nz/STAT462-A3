@@ -1,0 +1,601 @@
+---
+title: "STAT462 Assignment 3 – Question B"
+author: "Xia Yu (62380486) & David Ewing (82171165)"
+date: "`r format(Sys.time(), '%Y-%m-%d %H:%M')`"
+output:
+  html_document 
+---
+
+```{r libraries, echo=FALSE, message=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+options(repos = c(CRAN = "https://cran.stat.auckland.ac.nz/"))
+required_pkgs <- c(
+  "dplyr", "tidyr", "readr", "tibble", "janitor", "skimr",
+  "recipes", "rsample", "tidymodels", "rpart", "kernlab",
+  "FactoMineR", "factoextra", "caret" , "purrr", "plotly",
+  "RColorBrewer","glue","cluster","patchwork","ggplot2"
+)
+
+
+
+
+to_install <- setdiff(required_pkgs, rownames(installed.packages()))
+if (length(to_install)) install.packages(to_install, dependencies = TRUE)
+invisible(lapply(required_pkgs, library, character.only = TRUE))
+```
+
+## Data Preprocessing
+
+### Data Load and **Wrangling**
+
+```{r data-load}
+# Define the data directory path (relative to the current working directory)
+data_dir <- ("../data")
+
+# Construct full file paths to the annotated and unlabelled seed datasets
+path_annotated <- file.path(data_dir, "seeds_annotated.csv")
+path_unlabeled <- file.path(data_dir, "seeds.csv")
+
+# Read the annotated data, assuming decimal commas (",") are used in numeric values
+annotated <- read_csv(
+  path_annotated,
+  locale = locale(decimal_mark = ","),
+  show_col_types = FALSE   # Suppress column type messages
+)
+
+# Read the unlabelled seed data using the same locale settings
+unlabeled <- read_csv(
+  path_unlabeled,
+  locale = locale(decimal_mark = ","),
+  show_col_types = FALSE
+)
+
+annotated <- select(annotated,-...1)  # Removes the column named ...1
+unlabeled <- select(unlabeled,-...1)
+```
+
+### Data Inspection
+
+```{r}
+skim(unlabeled)
+```
+
+No missing data found in `unlabeled`.
+
+```{r}
+skim(annotated)
+```
+
+No missing data found in `annotated`.
+
+### Z-score Normalisation
+
+```{r scale-unlabeled}
+# Select only the numeric columns from the unlabeled dataset
+# This is important because scaling only applies to continuous numeric variables
+unlabeled_scaled <- select(unlabeled, where(is.numeric)) |>
+  
+  # Apply standardization (z-score scaling) to each numeric column
+  # This transforms each feature to have mean = 0 and standard deviation = 1
+  scale() |>
+  
+  # Convert the result from a matrix back to a tibble for compatibility with tidyverse
+  as_tibble()
+
+skim(unlabeled_scaled)
+```
+
+The reason we do Z-score normalisation is that clustering algorithms such as k-means are distance-based (typically Euclidean distance). If one variable has a much larger scale than others (e.g., 100s vs. 0.1s), it will dominate the distance metric and bias the clustering results.
+
+Z-score standardization ensures that all features contribute equally to the clustering process.
+
+## K‑means from Scratch
+
+### K-means Algorithms
+
+```{r kmeans-from-scratch}
+# Compute squared distance from each row of X to a single centroid
+delta_to_centroid <- function(X, centroid) {
+  n <- nrow(X)
+  p <- ncol(X)
+  rowSums((X - matrix(centroid, n, p, byrow = TRUE))^2)  # ensure conformable dimensions
+}
+
+# Compute a distance matrix from all points to all centroids
+delta_matrix <- function(X, centroids) {
+  k <- nrow(centroids)
+  sapply(seq_len(k), function(i) delta_to_centroid(X, centroids[i, ]))
+}
+
+# Compute total within-cluster sum of squares using f_kmeans output
+compute_wss <- function(k, data, max_iter, start) {
+  model <- f_kmeans(data, k, max_iter = max_iter, start = start)
+  
+  X <- as.matrix(data)                       # ensure matrix format
+  clusters <- model$clusters                 # vector of cluster assignments
+  centroids <- model$centroids               # matrix of final centroids
+  
+  total_withinss <- sum(sapply(seq_len(k), function(j) {
+    idx <- which(clusters == j)              # indices assigned to cluster j
+    if (length(idx) > 0) {
+      point_set <- X[idx, , drop = FALSE]    # all points in cluster j
+      centroid_row <- matrix(centroids[j, , drop = FALSE],
+                             nrow = length(idx),
+                             ncol = ncol(X),
+                             byrow = TRUE)   # broadcast centroid for subtraction
+      sum(rowSums((point_set - centroid_row)^2))  # WCSS for cluster j
+    } else {
+      0
+    }
+  }))
+  
+  return(total_withinss)
+}
+
+# Custom K-means implementation
+f_kmeans <- function(data, k, max_iter = 100, start = 10) {
+  set.seed(82171165)
+  X <- as.matrix(data)                  # force to matrix
+  n <- nrow(X)
+  p <- ncol(X)
+
+  centroids <- X[sample(n), , drop = FALSE][1:k, ]  # random initial centroids
+  clusters <- integer(n)              # empty cluster assignment
+  iter_reached <- NA
+
+  for (iter in seq_len(max_iter)) {
+    distances <- delta_matrix(X, centroids)              # distance matrix
+    clusters_new <- max.col(-distances)                  # assign nearest centroid
+    has_converged <- !anyNA(clusters_new) && all(clusters_new == clusters)
+
+    if (has_converged) {
+      iter_reached <- iter
+      break
+    }
+
+    clusters <- clusters_new
+
+    # Recompute centroids
+    for (j in seq_len(k)) {
+      idx <- which(clusters == j)
+      if (length(idx) > 0) {
+        centroids[j, ] <- colMeans(X[idx, , drop = FALSE])  # new centroid
+      }
+    }
+  }
+
+  # Recompute WCSS at the end with safe dimension handling
+  total_withinss <- sum(sapply(seq_len(k), function(j) {
+    idx <- which(clusters == j)
+    if (length(idx) > 0) {
+      point_set <- X[idx, , drop = FALSE]
+      centroid_row <- matrix(centroids[j, , drop = FALSE],
+                             nrow = length(idx),
+                             ncol = ncol(X),
+                             byrow = TRUE)
+      sum(rowSums((point_set - centroid_row)^2))
+    } else {
+      0
+    }
+  }))
+
+  # Return result object
+  list(
+    clusters = clusters,
+    centroids = centroids,
+    iter = iter_reached,
+    total_withinss = total_withinss
+  )
+}
+
+
+```
+
+Custom Implementation of the K-means Clustering Algorithm：
+
+-   Computes squared Euclidean distances between data points and centroids.
+
+-   Assigns each data point to the nearest cluster.
+
+-   Recomputes centroids as the mean of assigned points.
+
+-   Iterates the above steps until convergence or a maximum number of iterations is reached.
+
+Computation of Within-Cluster Sum of Squares (WSS):
+
+-   For each specified number of clusters k, the algorithm computes the WSS.
+
+-   WSS measures the compactness of clusters — lower values indicate tighter clusters.
+
+Preparation for Determining Optimal Cluster Number:
+
+-   WSS values for a range of k (typically 2 to 10) are stored.
+
+-   These values can be visualised in an *elbow plot* to help determine the optimal number of clusters using the **elbow method**.
+
+### Test-toggle
+
+Before running whole data rows (more than 10k), we should conduct a test first.
+
+This code block verifies the **fundamental decomposition identity** in clustering: $${Total \ Sum\  of\  Squares (TotSS)} = \text{Between-Cluster SS (BSS)} + \text{Within-Cluster SS (WSS)}$$
+
+It runs the custom f_kmeans() implementation on several values of k (from 2 to 10), and for each: Calculates TotSS directly from the full dataset. Computes WSS using the result of K-means. Derives BSS by subtraction. Checks whether the identity approximately holds for each value of k, and outputs all values into a structured table. This acts as a diagnostic step to validate the correctness of the K-means implementation.
+
+```{r test-toggle}
+# Define a flag to control whether to run a test mode with a subset of data or the full mode. This is useful for quick debugging.
+testing <- FALSE 
+
+# Conditionally sets up a test configuration with fewer data rows and smaller k values if testing = TRUE, or sets full run parameters otherwise.
+# 
+# unlabeled_use is the standardised data passed to the clustering algorithm.
+# 
+# k_vals defines the range of clusters to evaluate.
+# 
+# max_iter limits the maximum number of K-means iterations per run.
+if (testing) {
+  message("🟡 Quick test: 500 rows, k=2:4, iter.max=5")
+  unlabeled_use <- unlabeled_scaled[1:500,]; k_vals <- 2:4; max_iter <- 5
+} else {
+  message("🟢 Full run: all rows, k=2:10, iter.max=100")
+  unlabeled_use <- unlabeled_scaled; k_vals <- 2:10; max_iter <- 100
+}
+
+# Redundantly resets k_vals, could be removed for efficiency, since it’s already defined above.
+k_vals <- 2:10
+
+# Similarly redundant; already set above, but safe to keep for clarity.
+unlabeled_use <- unlabeled_scaled
+
+# Computes the Within-Cluster Sum of Squares (WSS) for each k using the custom compute_wss() function and stores results in a numeric vector.
+
+# vapply() is used instead of sapply() for stricter type safety.
+wss_values <- vapply(k_vals, function(k) compute_wss(k, unlabeled_use, max_iter, start), numeric(1))
+
+unlabeled_use <- unlabeled_scaled
+
+```
+
+This chunk prepares clustering evaluation by:
+
+-   Running the custom K-means algorithm across a range of k values.
+
+-   Measuring the WSS (compactness) for each.
+
+-   Preparing the results for plotting the elbow curve to determine the optimal number of clusters.
+
+```{r diagnostics}
+# This chunk verifies the decomposition identity:
+# Total Sum of Squares = Within-Cluster SS + Between-Cluster SS
+
+debug_tbl <- purrr::map_dfr(k_vals, function(k) {
+  
+  # Run custom K-means with specified number of clusters
+  res <- f_kmeans(unlabeled_scaled, k, max_iter)
+
+  # Compute within-cluster sum of squares using the WSS function
+  tot_within <- compute_wss(k, unlabeled_use, max_iter)
+
+  # Compute the overall (grand) mean vector of the entire dataset
+  grand_mean <- colMeans(unlabeled_use)
+
+  # Compute total sum of squares (TotSS)
+  # This measures how far each data point is from the grand mean
+  totss <- sum(rowSums(
+    (as.matrix(unlabeled_use) -
+     matrix(grand_mean,
+            nrow = nrow(unlabeled_use),
+            ncol = ncol(unlabeled_use),
+            byrow = TRUE))^2
+  ))
+
+  # Compute between-cluster sum of squares (BetSS)
+  # This is the difference between total and within-cluster variation
+  betweenss <- totss - tot_within
+
+  # Return a tibble with current k and diagnostic values
+  # identity_ok checks that TotSS ≈ WSS + BSS (with tiny numerical tolerance)
+  tibble(
+    k = k,
+    tot_within = tot_within,
+    totss = totss,
+    betweenss = betweenss,
+    identity_ok = abs(totss - (betweenss + tot_within)) < 1e-8
+  )
+})
+
+# Display the full diagnostic table for all tested k values
+print(debug_tbl)
+
+```
+
+## Picking Best k by Elbow and Silhouette Methods
+
+**The Elbow Method** is based on the idea of diminishing returns in clustering quality. As the number of clusters `k` increases, the **total within-cluster sum of squares (WSS)** always decreases—since each point is closer to its cluster center. However, this improvement is not linear. Initially, adding clusters greatly reduces WSS, but after a certain point, the marginal gain becomes minimal. This point of inflection, where the curve “bends” like an elbow, indicates a suitable number of clusters that balances compactness with model simplicity.
+
+```{r}
+
+# Set up clustering input data and the range of k (number of clusters)
+unlabeled_use <- unlabeled_scaled
+k_vals <- 2:10
+max_iter <- 100
+start <- 10
+
+# Compute WSS for each k using the custom K-means function
+# This gives the total within-cluster sum of squares for Elbow plot
+wss_values <- vapply(
+  k_vals,
+  function(k) compute_wss(k, unlabeled_use, max_iter, start),
+  numeric(1)
+)
+
+
+```
+
+```{r elbow}
+# Create Elbow Plot (WSS vs. k)
+plot_wss <- qplot(k_vals, wss_values, geom = c("point", "line"),
+                  xlab = "Number of Clusters", ylab = "Total WCSS") +
+  ggtitle("Elbow Method") +
+  theme_minimal()
+```
+
+**The Silhouette Method**
+
+On the other hand, evaluates the **cohesion and separation** of clusters from a geometric perspective. For each data point, the silhouette score compares:
+
+-    $a(i)$:the average distance to other points in the same cluster (intra-cluster distance)
+
+-   $b(i)$:the average distance to points in the nearest neighbouring cluster (inter-cluster distance)
+
+-   The silhouette score is defined as:
+
+    $$s(i)=\frac{b(i)-a(i)}{\max \{a(i), b(i)\}}$$
+    Values close to 1 indicate well-separated and compact clusters, while values near 0 suggest overlapping clusters. The average silhouette width across all points serves as a global score of clustering quality. The k value that maximises this average silhouette score is often considered optimal.
+
+By combining Elbow and Silhouette methods together allows us to cross-validate the choice of k, balancing interpretability (elbow) and structure quality (silhouette).
+
+```{r silhouette, fig.cap="Elbow and Silhouette plots for determining optimal k"}
+# Compute average silhouette width for each k
+# Silhouette width measures how well points fit within their cluster vs. the next closest cluster
+diss_matrix <- dist(unlabeled_use)  # Compute Euclidean distance matrix once
+silhouette_values <- vapply(k_vals, function(k) {
+  model <- f_kmeans(unlabeled_use, k, max_iter = max_iter, start = start)  # run clustering
+  if (!is.null(model$clusters)) {
+    sil <- silhouette(model$clusters, diss_matrix)  # silhouette object
+    mean(sil[, 3])  # extract average silhouette width
+  } else {
+    NA_real_  # in case of error or no clusters
+  }
+}, numeric(1))
+
+# Create Silhouette Plot (Avg. silhouette width vs. k)
+plot_sil <- qplot(k_vals, silhouette_values, geom = c("point", "line"),
+                  xlab = "Number of Clusters", ylab = "Average Silhouette Width") +
+  ggtitle("Silhouette Method") +
+  theme_minimal()
+
+# Show the silhouette plot followed by the elbow plot
+plot_sil
+plot_wss
+
+```
+
+-   The silhouette method gives a quality score (higher is better).
+
+-   The elbow method helps locate the "knee point" where WSS reduction starts to slow down.
+
+-   Running both provides a **cross-validation** of the optimal number of clusters.
+
+### Elbow Method – Interpretation
+
+The total within-cluster sum of squares (WSS) decreases as the number of clusters（k） increases, which is expected. The "elbow" point appears around k = 5 or k=7: Before k = 5, the reduction in WSS is sharp, while k=7 is the second "elbow" point. After k = 5, the gains in compactness diminish, indicating diminishing returns. This suggests that 5 or 7 clusters may be a good balance between underfitting and overfitting.
+
+### Silhouette Method – Interpretation
+
+The average silhouette width is highest at k = 2, with a value close to 0.4. However, the silhouette score drops significantly at k = 3, then peaks again slightly at k = 5, before steadily declining. A local maximum at k = 5 suggests that this value produces relatively well-separated and compact clusters compared to neighbouring options. Although k = 2 achieves the highest silhouette score, it may be too coarse (only 2 clusters). The local peak at k = 5 offers a more meaningful trade-off between separation and granularity.
+
+So, our final optimal clustering number should suggest k=`5`.
+
+### Aligning Unsupervised Clusters with Annotated Classes
+
+```{r assign-class-labels-proximity, echo=TRUE, message=FALSE}
+
+# ══════════════════════════════════════════════════════════════
+# Assign inferred class labels to each cluster by comparing centroid proximity
+# ══════════════════════════════════════════════════════════════
+
+# Step 0: Run K-means clustering with k = 5 (determined earlier from Elbow/Silhouette)
+res_final <- f_kmeans(unlabeled_scaled, k = 5, max_iter = 100)
+
+# ──────────────────────────────────────────────────────────────
+# Step 1: Compute cluster centroids in the scaled unlabeled dataset
+cluster_centroids <- unlabeled_scaled %>%
+  as.data.frame() %>%
+  mutate(cluster = res_final$clusters) %>%  # Assign cluster labels
+  group_by(cluster) %>%
+  summarise(across(everything(), mean), .groups = "drop")  # Mean per cluster
+
+# ──────────────────────────────────────────────────────────────
+# Step 2: Compute centroids of known classes in scaled annotated data
+annotated_scaled <- annotated %>%
+  mutate(Class = as.factor(Class)) %>%
+  select(-Class) %>%
+  scale() %>%
+  as.data.frame()
+
+# Bind class labels back after scaling
+annotated_centroids <- annotated_scaled %>%
+  mutate(Class = annotated$Class) %>%
+  group_by(Class) %>%
+  summarise(across(everything(), mean), .groups = "drop")
+
+# ──────────────────────────────────────────────────────────────
+# Step 3: Calculate Euclidean distances between cluster and class centroids
+cluster_matrix <- as.matrix(select(cluster_centroids, -cluster))
+class_matrix   <- as.matrix(select(annotated_centroids, -Class))
+distance_matrix <- as.matrix(dist(rbind(cluster_matrix, class_matrix)))
+
+# Extract k × m distance submatrix: rows = clusters, columns = classes
+k <- nrow(cluster_matrix)
+m <- nrow(class_matrix)
+prox_matrix <- distance_matrix[1:k, (k + 1):(k + m)]
+
+# ──────────────────────────────────────────────────────────────
+# Step 4: Assign each cluster to the closest known class
+closest_class_index <- apply(prox_matrix, 1, which.min)  # for each cluster, find closest class
+closest_class_labels <- annotated_centroids$Class[closest_class_index]
+
+# Create a named vector: cluster ID → class label
+cluster_to_label <- setNames(as.character(closest_class_labels), cluster_centroids$cluster)
+
+# Add assigned class labels to each unlabeled sample (based on its cluster)
+unlabeled_use <- unlabeled_scaled %>%
+  as.data.frame() %>%
+  mutate(cluster = res_final$clusters) %>%
+  mutate(label = cluster_to_label[as.character(cluster)])
+
+```
+
+This chunk aligns unsupervised cluster assignments with known class labels by comparing centroids in the standardised feature space. Each cluster is matched to the closest annotated class using Euclidean distance between centroids, enabling interpretable labeling of previously unlabeled data. This provides a bridge between unsupervised clustering and semi-supervised classification.
+
+### Visualisation of Clusters in by PCA and HCPC method
+
+This part outlines the implementation of Principal Component Analysis (PCA) on the standardised feature set of the unlabelled dataset to reduce dimensionality and visualise clustering results. The first three principal components (PC1, PC2, PC3) are extracted and plotted in a 3D scatter plot, with each data point coloured according to its inferred class label.
+
+```{r pca-plot-with-class-labels, eval=F, echo=TRUE, message=FALSE, warning=FALSE}
+# Perform Principal Component Analysis (PCA) on the scaled unlabeled dataset
+pca_result <- PCA(unlabeled_scaled, graph = FALSE)
+
+# Extract coordinates of individuals on the first 3 principal components
+pca_coords <- as.data.frame(pca_result$ind$coord[, 1:3])
+colnames(pca_coords) <- c("PC1", "PC2", "PC3")
+
+# Assign predicted class labels to each observation for colouring
+pca_coords$Class <- unlabeled_use$label
+
+# Define a discrete colour palette using RColorBrewer
+pal <- brewer.pal(max(3, length(unique(pca_coords$Class))), "Set2")
+
+# Create an interactive 3D scatter plot of the first three principal components
+plot_ly(data = pca_coords,
+        x = ~PC1, y = ~PC2, z = ~PC3,
+        color = ~Class, colors = pal,
+        type = "scatter3d", mode = "markers",
+        marker = list(size = 3)) |>
+  layout(title = "PCA – Colored by Assigned Class Labels",
+         legend = list(title = list(text = "Class")),
+         scene = list(
+           xaxis = list(title = "PC1"),
+           yaxis = list(title = "PC2"),
+           zaxis = list(title = "PC3")
+         ))
+
+
+```
+
+```{r hcpc-3d-1, message=FALSE, warning=FALSE, eval=TRUE}
+# Perform HCPC (Hierarchical Clustering on Principal Components) and 3D visualisation
+if (!exists("res.pca") || !exists("res.hcpc")) {
+  hcpc_data <- scale(unlabeled)                 # Standardise the original unlabeled data
+  res.pca <- PCA(hcpc_data, graph = FALSE)      # Run PCA on scaled data (no graph output)
+  res.hcpc <- HCPC(res.pca, graph = FALSE)      # Run HCPC on PCA results (no graph output)
+}
+
+# Extract coordinates of the first three principal components
+pca_coords <- as.data.frame(res.pca$ind$coord[, 1:3])
+colnames(pca_coords) <- c("PC1", "PC2", "PC3")
+
+# Add cluster information (from earlier k-means) for colouring
+pca_coords$cluster <- factor(unlabeled_use$cluster)
+
+# Create colour palette
+pal <- brewer.pal(max(3, length(levels(pca_coords$cluster))), "Set2")
+
+# Interactive plot for HTML output
+if (knitr::is_html_output()) {
+  plot_ly(
+    data = pca_coords,
+    x = ~PC1, y = ~PC2, z = ~PC3,
+    type = "scatter3d", mode = "markers",
+    color = ~cluster, colors = pal,
+    marker = list(size = 4)
+  ) |>
+    layout(
+      scene = list(
+        xaxis = list(title = "PC1"),
+        yaxis = list(title = "PC2"),
+        zaxis = list(title = "PC3")
+      ),
+      legend = list(title = list(text = "Cluster"))
+    )
+} else {
+  # Fallback 2D plot for non-HTML output (e.g. PDF)
+  fviz_cluster(
+    res.hcpc,
+    geom = "point", repel = TRUE,
+    show.clust.cent = TRUE,
+    axes = c(1, 2),
+    palette = pal
+  )
+}
+
+```
+
+This code block performs Hierarchical Clustering on Principal Components (HCPC) using the `FactoMineR` and `factoextra` packages.
+
+The K-means algorithm produced 5 clusters based on the elbow and silhouette criteria, whereas HCPC (Hierarchical Clustering on Principal Components) automatically selected 3 clusters. This discrepancy highlights the methodological difference: K-means relies on pre-specified `k` and optimises intra-cluster compactness, while HCPC infers cluster number from hierarchical structure, aiming to capture global data separation. These complementary results provide insights at different levels of granularity.
+
+```{r pca-plot-by-centroid-labels,eval=F,  message=FALSE, warning=FALSE}
+pca_coords2 <- as.data.frame(pca_result$ind$coord[, 1:3])
+colnames(pca_coords2) <- c("PC1", "PC2", "PC3")
+pca_coords2$label <- unlabeled_use$label_proximity
+
+pal2 <- brewer.pal(max(3, length(unique(pca_coords2$label))), "Set2")
+
+plot_ly(data = pca_coords2, 
+        x = ~PC1, y = ~PC2, z = ~PC3,
+        color = ~label, colors = pal2,
+        type = "scatter3d", mode = "markers",
+        marker = list(size = 3)) |>
+  layout(title = "PCA - Colored by Class Label (Centroid Proximity)",
+         legend = list(title = list(text = "Class")),
+         scene = list(
+           xaxis = list(title = "PC1"),
+           yaxis = list(title = "PC2"),
+           zaxis = list(title = "PC3")
+         ))
+```
+
+## Classification of Annotated Data
+
+### svmRadial Method
+
+```{r annotated-classification, echo=TRUE}
+# Ensure Class is a factor
+annotated$Class <- as.factor(annotated$Class)
+
+# Remove class temporarily, scale, then add back
+ann <- select(annotated, -Class) |> scale() |> as_tibble()
+ann$Class <- annotated$Class
+
+# Create training/test split
+set.seed(82171165)
+idx <- createDataPartition(ann$Class, p = 0.7, list = FALSE)
+train <- ann[idx, ]
+test  <- ann[-idx, ]
+
+# Train classifier
+model <- train(Class ~ ., data = train, method = "svmRadial")
+
+# Predict and evaluate
+pred <- predict(model, test)
+confusionMatrix(pred, test$Class)
+```
+
+Accuracy: 92.59% The model correctly classified \~93% of the test samples. 95% CI: (0.76, 0.99) The confidence interval for accuracy indicates the model is robust.
+
+**Class C and G**: High sensitivity but slightly lower precision — suggesting that while the model correctly detects these classes, there are some false positives.
+
+**Class A**: Only one out of two Class A samples was correctly classified — low recall but high precision.
+
+The model performs very well overall, especially considering the small sample size and class imbalance. It maintains perfect recall (1.0) for 5 out of 7 classes. Misclassifications are minimal and generally involve classes with few examples (e.g., A and E), which is expected in low-data scenarios. The classifier is suitable for practical seed classification and generalises well to unseen data.
